@@ -71,6 +71,12 @@ export async function GET(request: NextRequest) {
     for (const profile of activeProfiles) {
       results.processed++;
 
+      // Skip if no user_id (shouldn't happen, but TypeScript safety)
+      if (!profile.user_id) {
+        results.skipped++;
+        continue;
+      }
+
       try {
         // Check if user already generated matches in last 24 hours
         const yesterday = new Date();

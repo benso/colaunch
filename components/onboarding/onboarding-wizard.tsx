@@ -868,6 +868,10 @@ export function OnboardingWizard({ initialProfile }: OnboardingWizardProps) {
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="w-full lg:w-1/3">
           <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+            <div className="mb-3 flex items-center gap-2 rounded-full bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-200">
+              <span>⏱️</span>
+              <span>~4 minutes to complete</span>
+            </div>
             <div className="flex items-center justify-between text-sm text-white/60">
               <span className="font-semibold uppercase tracking-wide">Step {activeStep}</span>
               <span>{progress}%</span>

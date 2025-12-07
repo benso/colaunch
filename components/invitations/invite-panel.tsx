@@ -83,10 +83,10 @@ export function InvitePanel() {
         <Share2 className="h-5 w-5 text-amber-600" />
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-200">
-            Invite founders
+            Grow the network
           </h3>
           <p className="text-xs text-amber-700/80 dark:text-amber-100/80">
-            Share your referral link or send a targeted invite.
+            Know a founder with a great product? Invite them to unlock better matches for everyone.
           </p>
         </div>
       </div>
@@ -108,7 +108,8 @@ export function InvitePanel() {
           </button>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          {invitationsQuery.data?.referralCount ?? 0} founders joined via your link.
+          {invitationsQuery.data?.referralCount ?? 0} founders joined via your link. 
+          {(invitationsQuery.data?.referralCount ?? 0) === 0 && " Be the first to bring in a great team!"}
         </p>
       </div>
 
@@ -130,7 +131,7 @@ export function InvitePanel() {
             value={email}
             required
             onChange={(event) => setEmail(event.target.value)}
-            placeholder="Choose a founder to invite"
+            placeholder="founder@theircompany.com"
             className="flex-1 rounded-xl border border-amber-200/70 bg-white/80 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-amber-900/50 dark:bg-amber-950/20"
           />
           <button

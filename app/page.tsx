@@ -1,9 +1,9 @@
 import Link from "next/link";
 
 const stats = [
-  { metric: "4.8/5", label: "Founder satisfaction" },
-  { metric: "12k+", label: "Active partnership ideas" },
-  { metric: "3.2x", label: "Average launch reach" },
+  { metric: "Private Beta", label: "Join early-stage founders" },
+  { metric: "AI-Powered", label: "Smart matching in seconds" },
+  { metric: "Free to Start", label: "No credit card required" },
 ];
 
 const features = [
@@ -65,10 +65,10 @@ export default function Home() {
             Start free trial
           </Link>
           <Link
-            href="/auth/login"
+            href="/demo"
             className="inline-flex items-center justify-center rounded-full border border-white/40 px-8 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:border-white"
           >
-            View live demo
+            Try interactive demo
           </Link>
         </div>
 
@@ -117,20 +117,20 @@ export default function Home() {
         <div className="rounded-3xl border border-white/10 bg-white/10 p-10 shadow-2xl shadow-emerald-950/40 backdrop-blur">
           <h2 className="text-3xl font-semibold text-white sm:text-4xl">Stop renting attention. Grow together.</h2>
           <p className="mt-4 text-base text-emerald-50/80 sm:text-lg">
-            Join a vetted network of founders ready to share audiences, swap campaigns, and ship joint launches that feel organic for both communities.
+            Join our private beta of founders ready to share audiences, swap campaigns, and ship joint launches that feel organic for both communities.
           </p>
           <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:justify-center">
             <Link
               href="/auth/signup"
               className="inline-flex items-center justify-center rounded-full bg-white px-8 py-3 text-sm font-semibold text-emerald-900 transition hover:-translate-y-0.5 hover:bg-emerald-100"
             >
-              Claim your invite
+              Join the beta — it&apos;s free
             </Link>
             <Link
-              href="/onboarding"
+              href="/auth/login"
               className="inline-flex items-center justify-center rounded-full border border-white/40 px-8 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:border-white"
             >
-              Already onboarded? Resume setup
+              Already have an account? Sign in
             </Link>
           </div>
         </div>

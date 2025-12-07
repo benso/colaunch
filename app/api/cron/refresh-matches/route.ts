@@ -1,341 +1,281 @@
 import { NextResponse, type NextRequest } from "next/server";
+import OpenAI from "openai";
 
-import { getOpenAIClient } from "@/lib/openai";
-import { getPineconeClient } from "@/lib/pinecone";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getPineconeClient } from "@/lib/pinecone";
 import { calculateMatchScore } from "@/lib/matching";
-import type { Tables } from "@/types/database";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
- * Cron job to refresh matches for all active users
- * Runs daily at 10 AM UTC (configured in vercel.json)
+ * Vercel Cron endpoint to automatically generate matches for active users daily
+ * Schedule: Daily at 10am UTC (configured in vercel.json)
  * 
- * This endpoint should be protected by CRON_SECRET in production
+ * Security: Requires CRON_SECRET header to prevent unauthorized access
  */
-
-const TOP_K_RESULTS = 50;
-const MINIMUM_MATCH_SCORE = 60;
-const MAX_MATCHES_PER_USER = 5;
-const DAYS_SINCE_LAST_ACTIVE = 30;
-
-interface CandidateProfile {
-  user: {
-    id: string;
-    name: string | null;
-    email: string;
-    avatar_url: string | null;
-    created_at: string | null;
-    is_verified: boolean | null;
-    last_active_at: string | null;
-    referral_count: number | null;
-    onboarding_completed: boolean | null;
-  };
-  profile: {
-    id: string;
-    user_id: string | null;
-    product_name: string;
-    product_type: string | null;
-    product_description: string;
-    website_url: string | null;
-    audience_size: string;
-    industry_tags: string[];
-    what_i_offer: string[];
-    what_i_want: string[];
-  };
-  similarity: number;
-}
-
 export async function GET(request: NextRequest) {
   try {
     // Verify cron secret for security
     const authHeader = request.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+      console.error("❌ Unauthorized cron request");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    console.log("[Cron] Starting daily match refresh...");
+    console.log("🚀 Starting automated match generation...");
 
     const supabase = await getSupabaseServerClient();
+    const pinecone = getPineconeClient();
+    const index = pinecone.index(process.env.PINECONE_INDEX_NAME!);
 
-    // Get all active users with complete profiles
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - DAYS_SINCE_LAST_ACTIVE);
+    // Get all active users (active in last 30 days, have completed profiles)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const { data: activeUsers, error: usersError } = await supabase
-      .from("users")
-      .select("id, email, name, last_active_at, onboarding_completed")
-      .eq("onboarding_completed", true)
-      .gte("last_active_at", cutoffDate.toISOString());
+    const { data: activeProfiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("user_id, embedding_id, product_name")
+      .gte("last_active_at", thirtyDaysAgo.toISOString())
+      .not("embedding_id", "is", null)
+      .order("last_active_at", { ascending: false });
 
-    if (usersError) {
-      throw usersError;
+    if (profilesError) {
+      throw new Error(`Failed to fetch profiles: ${profilesError.message}`);
     }
 
-    if (!activeUsers || activeUsers.length === 0) {
-      console.log("[Cron] No active users found");
+    if (!activeProfiles || activeProfiles.length === 0) {
+      console.log("ℹ️ No active profiles to process");
       return NextResponse.json({ 
         success: true, 
-        message: "No active users to refresh",
-        processed: 0 
+        message: "No active profiles",
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        skipped: 0,
       });
     }
 
-    console.log(`[Cron] Processing ${activeUsers.length} active users`);
+    console.log(`📊 Found ${activeProfiles.length} active profiles`);
 
-    const pineconeApiKey = process.env.PINECONE_API_KEY;
-    const pineconeIndexName = process.env.PINECONE_INDEX_NAME;
+    const results = {
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      skipped: 0,
+      errors: [] as string[],
+    };
 
-    if (!pineconeApiKey || !pineconeIndexName) {
-      throw new Error("Pinecone configuration missing");
-    }
+    // Process each user
+    for (const profile of activeProfiles) {
+      results.processed++;
 
-    const pinecone = getPineconeClient();
-    const index = pinecone.index(pineconeIndexName);
-    const openai = getOpenAIClient();
-
-    let processedCount = 0;
-    let errorCount = 0;
-
-    // Process users in batches to avoid overwhelming the system
-    for (const user of activeUsers) {
       try {
-        // Get user's profile with embedding
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("user_id", user.id)
-          .maybeSingle();
+        // Check if user already generated matches in last 24 hours
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
 
-        if (profileError || !profile || !(profile as Tables<"profiles">).embedding_id) {
-          console.log(`[Cron] Skipping user ${user.id} - no valid profile/embedding`);
+        const { data: recentMatches } = await supabase
+          .from("matches")
+          .select("id")
+          .eq("user_id", profile.user_id)
+          .gte("created_at", yesterday.toISOString())
+          .limit(1);
+
+        if (recentMatches && recentMatches.length > 0) {
+          console.log(`⏭️ Skipping ${profile.product_name} - generated matches in last 24h`);
+          results.skipped++;
           continue;
         }
 
-        const typedProfile = profile as Tables<"profiles">;
+        // Get user's full profile data
+        const { data: fullProfile, error: profileError } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("user_id", profile.user_id)
+          .single();
+
+        if (profileError || !fullProfile) {
+          console.error(`❌ Failed to fetch profile for ${profile.user_id}`);
+          results.failed++;
+          results.errors.push(`Profile ${profile.user_id}: ${profileError?.message}`);
+          continue;
+        }
 
         // Query Pinecone for similar profiles
-        const queryResponse = await index.query({
-          id: typedProfile.embedding_id!,
-          topK: TOP_K_RESULTS,
+        const queryResponse = await index.namespace("profiles").query({
+          id: fullProfile.embedding_id,
+          topK: 50,
           includeMetadata: true,
           filter: {
-            user_id: { $ne: user.id },
+            user_id: { $ne: profile.user_id },
           },
         });
 
-        const candidateIds = (queryResponse.matches ?? [])
-          .filter((match) => match.metadata?.user_id && match.metadata.profile_id)
-          .map((match) => ({
-            userId: String(match.metadata!.user_id),
-            profileId: String(match.metadata!.profile_id),
-            score: match.score ?? 0,
-          }));
-
-        if (candidateIds.length === 0) {
-          console.log(`[Cron] No candidates found for user ${user.id}`);
+        if (!queryResponse.matches || queryResponse.matches.length === 0) {
+          console.log(`ℹ️ No matches found for ${profile.product_name}`);
+          results.skipped++;
           continue;
         }
 
-        // Get existing matches to avoid duplicates
-        const { data: existingMatches } = await supabase
-          .from("matches")
-          .select("partner_id, status")
-          .eq("user_id", user.id);
+        // Get partner profiles from database
+        const partnerIds = queryResponse.matches
+          .map((match) => match.metadata?.user_id as string)
+          .filter(Boolean);
 
-        const blockedPartners = new Set(
-          (existingMatches ?? [])
-            .filter((match) => match.status && match.status !== "suggested")
-            .map((match) => match.partner_id as string),
-        );
-
-        // Fetch candidate profiles and users
-        const { data: partnerProfiles } = await supabase
+        const { data: partnerProfiles, error: partnersError } = await supabase
           .from("profiles")
           .select("*")
-          .in(
-            "user_id",
-            candidateIds.map((c) => c.userId),
-          );
+          .in("user_id", partnerIds);
 
-        const { data: partnerUsers } = await supabase
-          .from("users")
-          .select("id, name, email, avatar_url, created_at, is_verified, last_active_at, referral_count, onboarding_completed")
-          .in(
-            "id",
-            candidateIds.map((c) => c.userId),
-          );
-
-        const partnerProfileMap = new Map(
-          (partnerProfiles ?? []).map((item) => [(item as Tables<"profiles">).user_id ?? "", item]),
-        );
-        const partnerUserMap = new Map((partnerUsers ?? []).map((item) => [item.id, item]));
-
-        const candidates: CandidateProfile[] = [];
-
-        for (const candidate of candidateIds) {
-          if (blockedPartners.has(candidate.userId)) continue;
-
-          const partnerProfile = partnerProfileMap.get(candidate.userId);
-          const partnerUser = partnerUserMap.get(candidate.userId);
-
-          if (!partnerProfile || !partnerUser || !partnerUser.onboarding_completed) continue;
-
-          candidates.push({
-            user: partnerUser,
-            profile: partnerProfile as CandidateProfile["profile"],
-            similarity: candidate.score,
-          });
-        }
-
-        if (candidates.length === 0) {
-          console.log(`[Cron] No valid candidates for user ${user.id}`);
+        if (partnersError || !partnerProfiles) {
+          console.error(`❌ Failed to fetch partner profiles for ${profile.user_id}`);
+          results.failed++;
+          results.errors.push(`Partners ${profile.user_id}: ${partnersError?.message}`);
           continue;
         }
 
         // Calculate match scores
-        const scoredCandidates = candidates
-          .map((candidate) => {
-            const breakdown = calculateMatchScore({
-              similarityScore: candidate.similarity,
-              userProfile: {
-                productType: typedProfile.product_type,
-                industryTags: typedProfile.industry_tags,
-                audienceSize: typedProfile.audience_size,
-                whatIOffer: typedProfile.what_i_offer,
-                whatIWant: typedProfile.what_i_want,
-              },
-              partnerProfile: {
-                productType: candidate.profile.product_type,
-                industryTags: candidate.profile.industry_tags ?? [],
-                audienceSize: candidate.profile.audience_size,
-                whatIOffer: candidate.profile.what_i_offer ?? [],
-                whatIWant: candidate.profile.what_i_want ?? [],
-              },
-              partnerUser: {
-                createdAt: candidate.user.created_at,
-                isVerified: candidate.user.is_verified,
-                lastActiveAt: candidate.user.last_active_at,
-                referralCount: candidate.user.referral_count,
-              },
-            });
+        const scoredMatches = partnerProfiles
+          .map((partner) => {
+            const pineconeMatch = queryResponse.matches.find(
+              (m) => m.metadata?.user_id === partner.user_id,
+            );
+
+            if (!pineconeMatch) return null;
+
+            const score = calculateMatchScore(
+              fullProfile,
+              partner,
+              pineconeMatch.score ?? 0,
+            );
 
             return {
-              user: candidate.user,
-              profile: candidate.profile,
-              score: breakdown.total,
-              breakdown,
+              partner,
+              score,
+              similarity: pineconeMatch.score ?? 0,
             };
           })
-          .filter((candidate) => candidate.score >= MINIMUM_MATCH_SCORE)
+          .filter((m): m is NonNullable<typeof m> => m !== null && m.score >= 60)
           .sort((a, b) => b.score - a.score)
-          .slice(0, MAX_MATCHES_PER_USER);
+          .slice(0, 10); // Top 10 matches
 
-        if (scoredCandidates.length === 0) {
-          console.log(`[Cron] No high-quality matches for user ${user.id}`);
+        if (scoredMatches.length === 0) {
+          console.log(`ℹ️ No high-quality matches (score >= 60) for ${profile.product_name}`);
+          results.skipped++;
           continue;
         }
 
-        // Generate AI explanations for top matches
-        const explanationPromises = scoredCandidates.map(async (candidate) => {
-          try {
-            const response = await openai.chat.completions.create({
-              model: "gpt-4o-mini",
-              messages: [
-                {
-                  role: "system",
-                  content: "You are an expert at pairing founders for growth collaborations.",
-                },
-                {
-                  role: "user",
-                  content: `Explain why these two founders are a strong match.\n\nFOUNDER A:\nProduct: ${typedProfile.product_name}\nType: ${typedProfile.product_type ?? "Unknown"}\nAudience size: ${typedProfile.audience_size}\nDescription: ${typedProfile.product_description}\n\nFOUNDER B:\nProduct: ${candidate.profile.product_name}\nType: ${candidate.profile.product_type ?? "Unknown"}\nAudience size: ${candidate.profile.audience_size}\nDescription: ${candidate.profile.product_description}\n\nProvide 2-3 reasons and 2 collaboration ideas.`,
-                },
-              ],
-              response_format: {
-                type: "json_schema",
-                json_schema: {
-                  name: "match_explanation",
-                  schema: {
-                    type: "object",
-                    properties: {
-                      reasons: {
-                        type: "array",
-                        items: { type: "string" },
-                        minItems: 2,
-                        maxItems: 3,
-                      },
-                      collaboration_ideas: {
-                        type: "array",
-                        items: { type: "string" },
-                        minItems: 2,
-                        maxItems: 2,
-                      },
-                      potential_value: { type: "string" },
-                    },
-                    required: ["reasons", "collaboration_ideas", "potential_value"],
-                    additionalProperties: false,
+        // Generate AI reasons and ideas for each match
+        const matchesWithAI = await Promise.all(
+          scoredMatches.map(async ({ partner, score, similarity }) => {
+            try {
+              const completion = await openai.chat.completions.create({
+                model: "gpt-4o-mini",
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "You are an expert at identifying partnership synergies. Generate specific, actionable reasons why two products should partner.",
                   },
-                  strict: true,
+                  {
+                    role: "user",
+                    content: `Product A: ${fullProfile.product_name}\nDescription: ${fullProfile.product_description}\nAudience: ${fullProfile.audience_size}\nOffers: ${fullProfile.partnership_offers?.join(", ")}\nWants: ${fullProfile.partnership_wants?.join(", ")}\n\nProduct B: ${partner.product_name}\nDescription: ${partner.product_description}\nAudience: ${partner.audience_size}\nOffers: ${partner.partnership_offers?.join(", ")}\nWants: ${partner.partnership_wants?.join(", ")}\n\nGenerate:\n1. 3-4 specific reasons why they should partner (focus on concrete benefits)\n2. 2-3 collaboration ideas (be creative and actionable)`,
+                  },
+                ],
+                response_format: {
+                  type: "json_schema",
+                  json_schema: {
+                    name: "match_analysis",
+                    strict: true,
+                    schema: {
+                      type: "object",
+                      properties: {
+                        reasons: {
+                          type: "array",
+                          items: { type: "string" },
+                        },
+                        ideas: {
+                          type: "array",
+                          items: { type: "string" },
+                        },
+                      },
+                      required: ["reasons", "ideas"],
+                      additionalProperties: false,
+                    },
+                  },
                 },
-              },
-              temperature: 0.7,
-              max_tokens: 600,
-            });
+                max_tokens: 500,
+              });
 
-            const content = response.choices[0]?.message?.content;
-            return content ? JSON.parse(content) : null;
-          } catch (error) {
-            console.error(`[Cron] Failed to generate explanation:`, error);
-            return {
-              reasons: ["Strong product and audience alignment", "Complementary partnership opportunities"],
-              collaboration_ideas: ["Co-host a webinar", "Run a joint email campaign"],
-              potential_value: "High potential for mutual growth",
-            };
-          }
-        });
+              const result = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
 
-        const explanations = await Promise.all(explanationPromises);
+              return {
+                user_id: fullProfile.user_id,
+                partner_id: partner.user_id,
+                score,
+                similarity_score: Math.round(similarity * 100),
+                reasons: result.reasons ?? [],
+                collaboration_ideas: result.ideas ?? [],
+                status: "suggested" as const,
+              };
+            } catch (aiError) {
+              console.error(`AI generation failed for match:`, aiError);
+              return {
+                user_id: fullProfile.user_id,
+                partner_id: partner.user_id,
+                score,
+                similarity_score: Math.round(similarity * 100),
+                reasons: ["AI-generated reasons temporarily unavailable"],
+                collaboration_ideas: ["Contact this founder to discuss partnership opportunities"],
+                status: "suggested" as const,
+              };
+            }
+          }),
+        );
 
-        // Upsert matches
-        const rowsToUpsert = scoredCandidates.map((candidate, index) => ({
-          user_id: user.id,
-          partner_id: candidate.user.id,
-          match_score: candidate.score,
-          match_reasons: explanations[index] ?? null,
-          status: "suggested",
-          last_interaction: new Date().toISOString(),
-        }));
-
-        const { error: upsertError } = await supabase
+        // Insert matches into database
+        const { error: insertError } = await supabase
           .from("matches")
-          .upsert(rowsToUpsert, { onConflict: "user_id,partner_id" });
+          .insert(matchesWithAI);
 
-        if (upsertError) {
-          console.error(`[Cron] Failed to upsert matches for user ${user.id}:`, upsertError);
-          errorCount++;
-        } else {
-          console.log(`[Cron] Created ${scoredCandidates.length} matches for user ${user.id}`);
-          processedCount++;
+        if (insertError) {
+          console.error(`❌ Failed to insert matches for ${profile.user_id}:`, insertError);
+          results.failed++;
+          results.errors.push(`Insert ${profile.user_id}: ${insertError.message}`);
+          continue;
         }
+
+        console.log(`✅ Generated ${matchesWithAI.length} matches for ${profile.product_name}`);
+        results.succeeded++;
+
+        // Small delay to avoid rate limits
+        await new Promise((resolve) => setTimeout(resolve, 100));
       } catch (error) {
-        console.error(`[Cron] Error processing user ${user.id}:`, error);
-        errorCount++;
+        console.error(`❌ Error processing ${profile.user_id}:`, error);
+        results.failed++;
+        results.errors.push(
+          `${profile.user_id}: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
       }
     }
 
-    console.log(`[Cron] Completed: ${processedCount} users processed, ${errorCount} errors`);
+    console.log("✅ Automated match generation complete");
+    console.log(`📊 Results:`, results);
 
     return NextResponse.json({
       success: true,
-      processed: processedCount,
-      errors: errorCount,
-      totalUsers: activeUsers.length,
+      message: "Match generation complete",
+      ...results,
     });
   } catch (error) {
-    console.error("[Cron] Match refresh failed:", error);
+    console.error("❌ Cron job failed:", error);
     return NextResponse.json(
-      { error: "Match refresh failed", details: String(error) },
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
       { status: 500 },
     );
   }

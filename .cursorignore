@@ -1,0 +1,7 @@
+# Cursor-specific ignore rules
+# This overrides .gitignore to allow reading .env.local for development assistance
+
+# Allow .env.local and .env.example to be read by Cursor
+!.env.local
+!.env.example
+

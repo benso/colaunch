@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Filter, Loader2 } from "lucide-react";
+import { Filter, Loader2, Sparkles } from "lucide-react";
 
 import { productCategories } from "@/lib/validations";
 
@@ -153,10 +153,20 @@ export function MatchFeed() {
             ))}
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-border/80 bg-muted/30 p-10 text-center">
-            <p className="text-lg font-semibold text-foreground">No matches yet</p>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Generate a fresh batch of matches to discover founders with complementary audiences and offers.
+          <div className="flex flex-col items-center justify-center gap-4 rounded-3xl border border-dashed border-emerald-300/50 bg-emerald-50/30 p-10 text-center dark:border-emerald-800/50 dark:bg-emerald-950/20">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/40">
+              <Sparkles className="h-8 w-8 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xl font-semibold text-foreground">Your profile is ready! 🎉</p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                Click &ldquo;Generate Matches&rdquo; above to find founders with complementary audiences. 
+                Our AI will analyze thousands of possibilities and surface your best partnership opportunities in seconds.
+              </p>
+            </div>
+            <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
+              <span>Typically takes 10–15 seconds</span>
             </p>
           </div>
         )

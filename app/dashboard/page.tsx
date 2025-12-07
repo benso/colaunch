@@ -1,4 +1,6 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
+import { Settings } from "lucide-react";
 
 import { requireAuthentication } from "@/lib/auth";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -65,6 +67,14 @@ export default async function DashboardPage() {
                 {profileData.product_type ? toTitleCase(profileData.product_type) : "Product"} • {profileData.audience_size ?? "Audience TBD"}
               </p>
             </div>
+            <Link
+              href="/settings/profile"
+              className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              title="Edit Profile"
+            >
+              <Settings className="h-4 w-4" />
+              Edit
+            </Link>
           </div>
           {analysis?.summary ? (
             <p className="mt-4 text-sm leading-relaxed text-muted-foreground">

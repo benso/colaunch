@@ -23,11 +23,12 @@ export const offerOptions = [
 ] as const;
 
 const urlSchema = z
-  .string()
-  .url("Enter a valid URL")
-  .max(200, "URL should be under 200 characters")
-  .optional()
-  .or(z.literal("").transform(() => undefined));
+  .union([
+    z.string().url("Enter a valid URL").max(200, "URL should be under 200 characters"),
+    z.literal(""),
+  ])
+  .transform((val) => (val === "" ? undefined : val))
+  .optional();
 
 export const profileSchema = z.object({
   productType: z.enum(productCategories),
@@ -74,7 +75,9 @@ export type ProfilePayload = z.infer<typeof profileSchema>;
 
 export const onboardingStepSchemas = {
   step1: profileSchema.pick({ productType: true }),
-  step2: profileSchema.pick({ productName: true, productDescription: true, websiteUrl: true }),
+  step2: profileSchema.pick({ productName: true, productDescription: true }).extend({
+    websiteUrl: z.union([z.string().url("Enter a valid URL").max(200), z.literal(""), z.undefined()]).transform((val) => (val === "" ? undefined : val)).optional(),
+  }),
   step3: profileSchema.pick({ partnerTypes: true, audienceSize: true, industryTags: true }),
   step4: profileSchema.pick({ whatIOffer: true }),
   step5: profileSchema.pick({ whatIWant: true }),

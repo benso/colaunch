@@ -4,18 +4,28 @@ import type { User } from "@supabase/supabase-js";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export async function getAuthenticatedUser() {
-  const supabase = await getSupabaseServerClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
+  try {
+    const supabase = await getSupabaseServerClient();
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
 
-  if (error) {
-    console.error("Failed to fetch user from Supabase", error);
+    if (error) {
+      // Silently return null for "session missing" errors - they're expected on login/signup pages
+      if (error.message === "Auth session missing!" || error.name === "AuthSessionMissingError") {
+        return null;
+      }
+      console.error("Failed to fetch user from Supabase", error);
+      return null;
+    }
+
+    return user;
+  } catch (error) {
+    // Catch any other unexpected errors
+    console.error("Unexpected error in getAuthenticatedUser:", error);
     return null;
   }
-
-  return user;
 }
 
 export async function requireAuthentication(pathname: string) {

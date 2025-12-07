@@ -94,25 +94,8 @@ export function AuthForm({ mode }: AuthFormProps) {
             return;
           }
 
-          const user = data.user;
-
-          if (user) {
-            const { error: insertError } = await supabase
-              .from("users")
-              .upsert(
-                {
-                  id: user.id,
-                  email: user.email ?? email,
-                  name,
-                  avatar_url: user.user_metadata?.avatar_url ?? null,
-                },
-                { onConflict: "id" },
-              );
-
-            if (insertError && insertError.code !== "23505") {
-              console.error("Failed to upsert user row", insertError);
-            }
-          }
+          // User row is automatically created by database trigger
+          // (see supabase/migrations/002_add_auto_user_creation.sql)
 
           if (data.session) {
             router.refresh();

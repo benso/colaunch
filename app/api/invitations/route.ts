@@ -1,7 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { Resend } from "resend";
 import { z } from "zod";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import InvitationEmail from "@/emails/invitation";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const postSchema = z.object({
   email: z.string().email("Enter a valid email"),
@@ -171,15 +175,45 @@ export async function POST(request: NextRequest) {
       throw insertError;
     }
 
+    // Get inviter's profile for email personalization
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("name, product_name")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const inviterName = profile?.name || user.email?.split("@")[0] || "A founder";
+    const inviterProduct = profile?.product_name || "their product";
+
+    // Send email via Resend
+    const origin = request.headers.get("origin");
+    const referralLink = origin
+      ? `${origin}/auth/signup?ref=${referralCode}`
+      : `https://colaunch.app/auth/signup?ref=${referralCode}`;
+
+    try {
+      await resend.emails.send({
+        from: "CoLaunch <invites@colaunch.app>",
+        to: parsed.data.email,
+        subject: `${inviterName} invited you to CoLaunch`,
+        react: InvitationEmail({
+          inviterName,
+          inviterProduct,
+          recipientEmail: parsed.data.email,
+          referralLink,
+        }),
+      });
+
+      console.log(`✅ Invitation email sent to ${parsed.data.email}`);
+    } catch (emailError) {
+      console.error("Failed to send invitation email:", emailError);
+      // Don't fail the request if email fails - invitation is still tracked
+    }
+
     await supabase
       .from("users")
       .update({ last_active_at: new Date().toISOString() })
       .eq("id", user.id);
-
-    const origin = request.headers.get("origin");
-    const referralLink = origin
-      ? `${origin}/auth/signup?ref=${referralCode}`
-      : `/auth/signup?ref=${referralCode}`;
 
     return NextResponse.json({ invitation, referralCode, referralLink });
   } catch (error) {
